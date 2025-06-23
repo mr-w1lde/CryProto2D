@@ -1,0 +1,63 @@
+# CryEngine
+.cache/
+.user/
+.sdf
+*.suo
+*.opensdf
+*.VC.db
+*.VC.opendb
+*.log
+*.tlog/
+*.ipch/
+*.pdb
+*.obj
+*.idb
+*.ilk
+*.aps
+*.ncb
+*.vcxproj.user
+*.sln.docstates
+*.CryprojectEnginePluginSpec.json
+*.Cryptex
+*.cryasset
+*.cryassetindex
+*.cryprojcache
+*.cryproject
+Editor/
+
+# Binaries
+Bin*/ 
+bin*/ 
+Tools/RC/rc.ini
+Tools/CryVersionSelector/*
+!Tools/CryVersionSelector/CryVersionSelector.sln
+
+# Build folders
+build/
+solutions/
+Build/
+!*/CMakeLists.txt
+
+# Visual Studio
+*.vcxproj*
+*.sln
+*.sdf
+*.opensdf
+*.db
+*.ipch
+.vscode/
+.idea/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Game
+Assets/
+user*/ 
