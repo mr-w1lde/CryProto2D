@@ -1,11 +1,11 @@
-// Copyright 2016-2020 Crytek GmbH / Crytek Group. All rights reserved.
+// Copyright 2017-2019 Crytek GmbH / Crytek Group. All rights reserved.
 #include "StdAfx.h"
 #include "Player.h"
-#include "Bullet.h"
 #include "SpawnPoint.h"
 #include "GamePlugin.h"
 
 #include <CryRenderer/IRenderAuxGeom.h>
+#include <CryPhysics/IPhysics.h>
 #include <CrySchematyc/Env/Elements/EnvComponent.h>
 #include <CryCore/StaticInstanceList.h>
 #include <CryNetwork/Rmi.h>
@@ -25,55 +25,39 @@ namespace
 
 void CPlayerComponent::Initialize()
 {
-	// The character controller is responsible for maintaining player physics
-	m_pEntity->GetOrCreateComponent<Cry::DefaultComponents::CStaticMeshComponent>();
-	// m_pEntity->LoadGeometry(GetOrMakeEntitySlotId(), "%ENGINE%/EngineAssets/Objects/primitive_sphere.cgf");
-	// if (slot != -1)
-	// {
-	// 	IMaterial* pMaterial = gEnv->p3DEngine->GetMaterialManager()->LoadMaterial("%ENGINE%/EngineAssets/TextureMsg/DefaultSolids");
-	// 	if (pMaterial != nullptr)
-	// 	{
-	// 		m_pEntity->SetMaterial(pMaterial);
-	// 	}
-	// }
-	m_pCharacterController = m_pEntity->GetOrCreateComponent<Cry::DefaultComponents::CCharacterControllerComponent>();
-	// m_pEntity->GetOrCreateComponent<Cry::DefaultComponents::CCapsulePrimitiveComponent>();
-	// Offset the default character controller up by one unit
-	// m_pCharacterController->SetTransformMatrix(Matrix34::Create(Vec3(1.f), IDENTITY, Vec3(0, 0, 1.f)));
-	// m_pCharacterController->GetPhysicsParameters().m_radius = 0.0f;
-	// m_pCharacterController->GetPhysicsParameters().m_height = 0.0f;
-
-	// Create the advanced animation component, responsible for updating Mannequin and animating the player
-	// m_pAnimationComponent = m_pEntity->GetOrCreateComponent<Cry::DefaultComponents::CAnimatedMeshComponent>();
+	// CryNetwork/CryPhysics: the entity has to be physicalized on both sides
+	// *prior* to binding to network, so the physical state is synced properly.
+	int slot = m_pEntity->LoadGeometry(GetOrMakeEntitySlotId(), "%ENGINE%/EngineAssets/Objects/primitive_sphere.cgf");
+	if (slot != -1)
+	{
+		IMaterial* pMaterial = gEnv->p3DEngine->GetMaterialManager()->LoadMaterial("%ENGINE%/EngineAssets/TextureMsg/DefaultSolids");
+		if (pMaterial != nullptr)
+		{
+			m_pEntity->SetMaterial(pMaterial);
+		}
+	}
 	
-	// Set the player geometry, this also triggers physics proxy creation
-	// %ENGINE%/EngineAssets/Objects/primitive_sphere.cgf
-	// m_pAnimationComponent->set("%ENGINE%/EngineAssets/Objects/primitive_sphere.cgf");
-	// m_pAnimationComponent->SetMannequinAnimationDatabaseFile("Animations/Mannequin/ADB/FirstPerson.adb");
-	// m_pAnimationComponent->SetCharacterFile("Assets/Objects/Characters/SampleCharacter/thirdperson.cdf");
+	SEntityPhysicalizeParams physParams;
+	physParams.type = PE_RIGID;
+	physParams.mass = 90.f;
+	m_pEntity->Physicalize(physParams);
 
-	
-	// m_pAnimationComponent->SetControllerDefinitionFile("Animations/Mannequin/ADB/FirstPersonControllerDefinition.xml");
-	// m_pAnimationComponent->SetDefaultScopeContextName("FirstPersonCharacter");
-	// Queue the idle fragment to start playing immediately on next update
-	// m_pAnimationComponent->SetDefaultFragmentName("Idle");
-
-	// Disable movement coming from the animation (root joint offset), we control this entirely via physics
-	// m_pAnimationComponent->SetAnimationDrivenMotion(true);
-
-	// Load the character and Mannequin data from file
-	// m_pAnimationComponent->LoadFromDisk();
-
-	// Acquire fragment and tag identifiers to avoid doing so each update
-	// m_idleFragmentId = m_pAnimationComponent->GetFragmentId("Idle");
-	// m_walkFragmentId = m_pAnimationComponent->GetFragmentId("Walk");
-	// m_rotateTagId = m_pAnimationComponent->GetTagId("Rotate");
+	// By default, the server delegates authority to a single Player-entity on the client.
+	// However, we want the player physics to be simulated server-side, so we need
+	// to prevent physics aspect delegation.
+	// This should be done on both sides.
+	m_pEntity->GetNetEntity()->EnableDelegatableAspect(eEA_Physics, false);
 
 	// Mark the entity to be replicated over the network
 	m_pEntity->GetNetEntity()->BindToNetwork();
-	
-	// Register the RemoteReviveOnClient function as a Remote Method Invocation (RMI) that can be executed by the server on clients
+
+	// Indicate the physics type, this will be synchronized across all clients
+	m_pEntity->GetNetEntity()->SetAspectProfile(eEA_Physics, physParams.type);
+
+	// Register the RemoteReviveOnClient function as a Remote Method Invocation (RMI) that can be executed on clients from the server
 	SRmi<RMI_WRAP(&CPlayerComponent::RemoteReviveOnClient)>::Register(this, eRAT_NoAttach, false, eNRT_ReliableOrdered);
+	// Register the RemoteRequestJumpOnServer as an RMI that can be executed on the server from clients
+	SRmi<RMI_WRAP(&CPlayerComponent::RemoteRequestJumpOnServer)>::Register(this, eRAT_NoAttach, true, eNRT_ReliableOrdered);
 }
 
 void CPlayerComponent::InitializeLocalPlayer()
@@ -84,13 +68,13 @@ void CPlayerComponent::InitializeLocalPlayer()
 	// Create the audio listener component.
 	m_pAudioListenerComponent = m_pEntity->GetOrCreateComponent<Cry::Audio::DefaultComponents::CListenerComponent>();
 
-	// Get the input component, wraps access to action mapping so we can easily get callbacks when inputs are triggered
+	// Get the input component, wraps access to action mapping so we can easily get callbacks when inputs are m_pEntity
 	m_pInputComponent = m_pEntity->GetOrCreateComponent<Cry::DefaultComponents::CInputComponent>();
 	
-	// Register an action, and the callback that will be sent when it's triggered
+	// Register an action, and the callback that will be sent when it's m_pEntity
 	m_pInputComponent->RegisterAction("player", "moveleft", [this](int activationMode, float value) { HandleInputFlagChange(EInputFlag::MoveLeft, (EActionActivationMode)activationMode);  }); 
 	// Bind the 'A' key the "moveleft" action
-	m_pInputComponent->BindAction("player", "moveleft", eAID_KeyboardMouse,	EKeyId::eKI_A);
+	m_pInputComponent->BindAction("player", "moveleft", eAID_KeyboardMouse, EKeyId::eKI_A);
 
 	m_pInputComponent->RegisterAction("player", "moveright", [this](int activationMode, float value) { HandleInputFlagChange(EInputFlag::MoveRight, (EActionActivationMode)activationMode);  }); 
 	m_pInputComponent->BindAction("player", "moveright", eAID_KeyboardMouse, EKeyId::eKI_D);
@@ -108,41 +92,41 @@ void CPlayerComponent::InitializeLocalPlayer()
 	m_pInputComponent->BindAction("player", "mouse_rotatepitch", eAID_KeyboardMouse, EKeyId::eKI_MouseY);
 
 	// Register the shoot action
-	m_pInputComponent->RegisterAction("player", "shoot", [this](int activationMode, float value)
+	m_pInputComponent->RegisterAction("player", "jump", [this](int activationMode, float value)
 	{
-		// Only fire on press, not release
-		if (activationMode == eAAM_OnPress)
+		if (activationMode != eAAM_OnPress)
+			return;
+
+		// Flags for the ray cast
+		const unsigned int rayFlags = rwi_stop_at_pierceable | rwi_colltype_any;
+
+		// Container which holds the ray hit information
+		ray_hit hit;
+
+		// Get the player bbox
+		AABB bbox;
+		m_pEntity->GetLocalBounds(bbox);
+
+		// Ray cast direction which is down for our case.
+		const Vec3 rayDirection = Vec3(0.0f, 0.0f, -1.0f) * bbox.GetRadius();
+
+		// Max hit is 1 since we only want to know the closest collision to the player.
+		const int maxHits = 1;
+
+		// Find out if the player is in the air
+		// Ray cast the world and add the player to the skip entity list so we don't hit the player itself.
+		const bool canJump = gEnv->pPhysicalWorld->RayWorldIntersection(m_pEntity->GetWorldPos(), rayDirection, ent_all, rayFlags, &hit, maxHits, m_pEntity->GetPhysicalEntity()) > 0;
+
+		if (canJump)
 		{
-			// if (ICharacterInstance *pCharacter = m_pAnimationComponent->GetCharacter())
-			// {
-			// 	IAttachment* pBarrelOutAttachment = pCharacter->GetIAttachmentManager()->GetInterfaceByName("barrel_out");
-			//
-			// 	if (pBarrelOutAttachment != nullptr)
-			// 	{
-			// 		QuatTS bulletOrigin = pBarrelOutAttachment->GetAttWorldAbsolute();
-			//
-			// 		SEntitySpawnParams spawnParams;
-			// 		spawnParams.pClass = gEnv->pEntitySystem->GetClassRegistry()->GetDefaultClass();
-			//
-			// 		spawnParams.vPosition = bulletOrigin.t;
-			// 		spawnParams.qRotation = bulletOrigin.q;
-			//
-			// 		const float bulletScale = 0.05f;
-			// 		spawnParams.vScale = Vec3(bulletScale);
-			//
-			// 		// Spawn the entity
-			// 		if (IEntity* pEntity = gEnv->pEntitySystem->SpawnEntity(spawnParams))
-			// 		{
-			// 			// See Bullet.cpp, bullet is propelled in  the rotation and position the entity was spawned with
-			// 			pEntity->CreateComponentClass<CBulletComponent>();
-			// 		}
-			// 	}
-			// }
+			// RMI is used here only for demo purposes, the actual jump action
+			// can be sent with input flags as well.
+			SRmi<RMI_WRAP(&CPlayerComponent::RemoteRequestJumpOnServer)>::InvokeOnServer(this, RemoteRequestJumpParams{});
 		}
 	});
 
-	// Bind the shoot action to left mouse click
-	m_pInputComponent->BindAction("player", "shoot", eAID_KeyboardMouse, EKeyId::eKI_Mouse1);
+	// Bind the jump action to the space bar
+	m_pInputComponent->BindAction("player", "jump", eAID_KeyboardMouse, EKeyId::eKI_Space);
 }
 
 Cry::Entity::EventFlags CPlayerComponent::GetEventMask() const
@@ -170,20 +154,17 @@ void CPlayerComponent::ProcessEvent(const SEntityEvent& event)
 		
 		const float frameTime = event.fParam[0];
 
-		// Start by updating the movement request we want to send to the character controller
-		// This results in the physical representation of the character moving
-		UpdateMovementRequest(frameTime);
-
-		// Process mouse input to update look orientation.
-		// UpdateLookDirectionRequest(frameTime);
-
-		// Update the animation state of the character
-		// UpdateAnimation(frameTime);
-
 		if (IsLocalClient())
 		{
 			// Update the camera component offset
 			UpdateCamera(frameTime);
+		}
+
+		if (gEnv->bServer) // Simulate physics only on the server for now.
+		{
+			// Start by updating the movement request we want to send to the character controller
+			// This results in the physical representation of the character moving
+			UpdateMovementRequest(frameTime);
 		}
 	}
 	break;
@@ -196,112 +177,84 @@ void CPlayerComponent::ProcessEvent(const SEntityEvent& event)
 	}
 }
 
-bool CPlayerComponent::NetSerialize(TSerialize ser, EEntityAspects aspect, uint8 profile, int flags)
-{
-	if(aspect == InputAspect)
-	{
-		ser.BeginGroup("PlayerInput");
-
-		const CEnumFlags<EInputFlag> prevInputFlags = m_inputFlags;
-
-		ser.Value("m_inputFlags", m_inputFlags.UnderlyingValue(), 'ui8');
-
-		if (ser.IsReading())
-		{
-			const CEnumFlags<EInputFlag> changedKeys = prevInputFlags ^ m_inputFlags;
-
-			const CEnumFlags<EInputFlag> pressedKeys = changedKeys & prevInputFlags;
-			if (!pressedKeys.IsEmpty())
-			{
-				HandleInputFlagChange(pressedKeys, eAAM_OnPress);
-			}
-
-			const CEnumFlags<EInputFlag> releasedKeys = changedKeys & prevInputFlags;
-			if (!releasedKeys.IsEmpty())
-			{
-				HandleInputFlagChange(pressedKeys, eAAM_OnRelease);
-			}
-		}
-
-		// Serialize the player look orientation
-		// ser.Value("m_lookOrientation", m_lookOrientation, 'ori3');
-
-		ser.EndGroup();
-	}
-	
-	return true;
-}
-
 void CPlayerComponent::UpdateMovementRequest(float frameTime)
 {
-	// Don't handle input if we are in air
-	if (!m_pCharacterController->IsOnGround())
-		return;
-
-	Vec3 velocity = ZERO;
-
-	const float moveSpeed = 20.5f;
-
-	if (m_inputFlags & EInputFlag::MoveLeft)
+	if (IPhysicalEntity* pPhysicalEntity = m_pEntity->GetPhysicalEntity())
 	{
-		velocity.x -= moveSpeed * frameTime;
-	}
-	if (m_inputFlags & EInputFlag::MoveRight)
-	{
-		velocity.x += moveSpeed * frameTime;
-	}
-	if (m_inputFlags & EInputFlag::MoveForward)
-	{
-		velocity.y += moveSpeed * frameTime;
-	}
-	if (m_inputFlags & EInputFlag::MoveBack)
-	{
-		velocity.y -= moveSpeed * frameTime;
-	}
+		Vec3 velocity = ZERO;
 
-	m_pCharacterController->AddVelocity(GetEntity()->GetWorldRotation() * velocity);
-}
+		const float moveImpulseStrength = 800.f;
 
-void CPlayerComponent::UpdateAnimation(float frameTime)
-{
-	// const float angularVelocityTurningThreshold = 0.174; // [rad/s]
-	//
-	// // Update tags and motion parameters used for turning
-	// const bool isTurning = std::abs(m_averagedHorizontalAngularVelocity.Get()) > angularVelocityTurningThreshold;
-	// m_pAnimationComponent->SetTagWithId(m_rotateTagId, isTurning);
-	// if (isTurning)
-	// {
-	// 	// TODO: This is a very rough predictive estimation of eMotionParamID_TurnAngle that could easily be replaced with accurate reactive motion 
-	// 	// if we introduced IK look/aim setup to the character's model and decoupled entity's orientation from the look direction derived from mouse input.
-	//
-	// 	const float turnDuration = 1.0f; // Expect the turning motion to take approximately one second.
-	// 	m_pAnimationComponent->SetMotionParameter(eMotionParamID_TurnAngle, m_horizontalAngularVelocity * turnDuration);
-	// }
-	//
-	// // Update active fragment
-	// const FragmentID& desiredFragmentId = m_pCharacterController->IsWalking() ? m_walkFragmentId : m_idleFragmentId;
-	// if (m_activeFragmentId != desiredFragmentId)
-	// {
-	// 	m_activeFragmentId = desiredFragmentId;
-	// 	m_pAnimationComponent->QueueFragmentWithId(m_activeFragmentId);
-	// }
+		// Update movement
+		Vec3 direction = ZERO;
 
-	// Update entity rotation as the player turns
-	// We only want to affect Z-axis rotation, zero pitch and roll
-	// Ang3 ypr = CCamera::CreateAnglesYPR(Matrix33(m_lookOrientation));
-	// ypr.y = 0;
-	// ypr.z = 0;
-	// const Quat correctedOrientation = Quat(CCamera::CreateOrientationYPR(ypr));
+		if (m_inputFlags & EInputFlag::MoveLeft)
+		{
+			direction -= m_lookOrientation.GetColumn0();
+		}
+		if (m_inputFlags & EInputFlag::MoveRight)
+		{
+			direction += m_lookOrientation.GetColumn0();
+		}
+		if (m_inputFlags & EInputFlag::MoveForward)
+		{
+			direction += m_lookOrientation.GetColumn1();
+		}
+		if (m_inputFlags & EInputFlag::MoveBack)
+		{
+			direction -= m_lookOrientation.GetColumn1();
+		}
+		
+		direction.z = 0.0f;
 
-	// Send updated transform to the entity, only orientation changes
-	// GetEntity()->SetPosRotScale(GetEntity()->GetWorldPos(), correctedOrientation, Vec3(1, 1, 1));
+		// Only dispatch the impulse to physics if one was provided
+		if (!direction.IsZero())
+		{
+			pe_action_impulse impulseAction;
+
+			// Multiply by frame time to keep consistent across machines
+			impulseAction.impulse = direction.GetNormalized() * moveImpulseStrength * frameTime;
+
+			pPhysicalEntity->Action(&impulseAction);
+		}
+	}
 }
 
 void CPlayerComponent::UpdateCamera(float frameTime)
 {
+	// Start with updating look orientation from the latest input
+	Ang3 ypr = CCamera::CreateAnglesYPR(Matrix33(m_lookOrientation));
+
+	if (!m_mouseDeltaRotation.IsZero())
+	{
+		const float rotationSpeed = 0.002f;
+
+		ypr.x += m_mouseDeltaRotation.x * rotationSpeed;
+
+		const float rotationLimitsMinPitch = -1.2;
+		const float rotationLimitsMaxPitch = 0.05f;
+
+		// TODO: Perform soft clamp here instead of hard wall, should reduce rot speed in this direction when close to limit.
+		ypr.y = CLAMP(ypr.y + m_mouseDeltaRotation.y * rotationSpeed, rotationLimitsMinPitch, rotationLimitsMaxPitch);
+
+		// Look direction needs to be synced to server to calculate the movement in
+		// the right direction.
+		m_lookOrientation = Quat(CCamera::CreateOrientationYPR(ypr));
+		NetMarkAspectsDirty(InputAspect);
+
+		// Reset every frame
+		m_mouseDeltaRotation = ZERO;
+	}
+
+	// Start with changing view rotation to the requested mouse look orientation
 	Matrix34 localTransform = IDENTITY;
-	
-	localTransform.SetTranslation(Vec3(0, -1.5f, 2.f));
+	localTransform.SetRotation33(Matrix33(m_pEntity->GetWorldRotation().GetInverted()) * CCamera::CreateOrientationYPR(ypr));
+
+	const float viewDistance = 10.f;
+
+	// Offset the player along the forward axis (normally back)
+	// Also offset upwards
+	localTransform.SetTranslation(-localTransform.GetColumn1() * viewDistance);
 
 	m_pCameraComponent->SetTransformMatrix(localTransform);
 	m_pAudioListenerComponent->SetOffset(localTransform.GetTranslation());
@@ -347,6 +300,7 @@ bool CPlayerComponent::RemoteReviveOnClient(RemoteReviveParams&& params, INetCha
 void CPlayerComponent::Revive(const Matrix34& transform)
 {
 	m_isAlive = true;
+	m_inputFlags.Clear();
 	
 	// Set the entity transformation, except if we are in the editor
 	// In the editor case we always prefer to spawn where the viewport is
@@ -354,20 +308,6 @@ void CPlayerComponent::Revive(const Matrix34& transform)
 	{
 		m_pEntity->SetWorldTM(transform);
 	}
-	
-	
-	// Apply character to the entity
-	// m_pAnimationComponent->ResetCharacter();
-	m_pCharacterController->Physicalize();
-
-	// Reset input now that the player respawned
-	m_inputFlags.Clear();
-	NetMarkAspectsDirty(InputAspect);
-	
-	m_mouseDeltaRotation = ZERO;
-	m_mouseDeltaSmoothingFilter.Reset();
-
-	m_activeFragmentId = FRAGMENT_ID_INVALID;
 }
 
 void CPlayerComponent::HandleInputFlagChange(const CEnumFlags<EInputFlag> flags, const CEnumFlags<EActionActivationMode> activationMode, const EInputFlagType type)
@@ -396,9 +336,82 @@ void CPlayerComponent::HandleInputFlagChange(const CEnumFlags<EInputFlag> flags,
 	}
 	break;
 	}
-	
-	if(IsLocalClient())
+
+	// Input is replicated from the client to the server.
+	if (IsLocalClient())
 	{
 		NetMarkAspectsDirty(InputAspect);
 	}
+}
+
+bool CPlayerComponent::NetSerialize(TSerialize ser, EEntityAspects aspect, uint8 profile, int flags)
+{
+	if (aspect == InputAspect)
+	{
+		ser.BeginGroup("PlayerInput");
+
+		const CEnumFlags<EInputFlag> prevInputFlags = m_inputFlags;
+
+		ser.Value("m_inputFlags", m_inputFlags.UnderlyingValue(), 'ui8');
+
+		if (ser.IsReading())
+		{
+			const CEnumFlags<EInputFlag> changedKeys = prevInputFlags ^ m_inputFlags;
+
+			const CEnumFlags<EInputFlag> pressedKeys = changedKeys & prevInputFlags;
+			if (!pressedKeys.IsEmpty())
+			{
+				HandleInputFlagChange(pressedKeys, eAAM_OnPress);
+			}
+
+			const CEnumFlags<EInputFlag> releasedKeys = changedKeys & prevInputFlags;
+			if (!releasedKeys.IsEmpty())
+			{
+				HandleInputFlagChange(pressedKeys, eAAM_OnRelease);
+			}
+		}
+
+		// Serialize the player look orientation
+		ser.Value("m_lookOrientation", m_lookOrientation, 'ori3');
+
+		ser.EndGroup();
+	}
+	else if (aspect == eEA_Physics)
+	{
+		// Determine the physics type used by the remote side
+		pe_type remotePhysicsType = static_cast<pe_type>(profile);
+
+		// Nothing can be serialized if we are not physicalized
+		if (remotePhysicsType == PE_NONE)
+			return true;
+
+		if (ser.IsWriting())
+		{
+			// If the remote physics type does not match our local state, serialize a dummy snapshot
+			// Note that this might indicate a game code error, please ensure that the remote and local states match
+			IPhysicalEntity* pPhysicalEntity = m_pEntity->GetPhysicalEntity();
+			if (pPhysicalEntity == nullptr || pPhysicalEntity->GetType() != remotePhysicsType)
+			{
+				gEnv->pPhysicalWorld->SerializeGarbageTypedSnapshot(ser, remotePhysicsType, 0);
+				return true;
+			}
+		}
+
+		// Serialize physics state in order to keep the clients in sync
+		m_pEntity->PhysicsNetSerializeTyped(ser, remotePhysicsType, flags);
+	}
+
+	return true;
+}
+
+
+bool CPlayerComponent::RemoteRequestJumpOnServer(RemoteRequestJumpParams&& p, INetChannel *pChannel)
+{
+	if (IPhysicalEntity* pPhysicalEntity = m_pEntity->GetPhysicalEntity())
+	{
+		pe_action_impulse impulse;
+		impulse.impulse = Vec3(0, 0, 800);
+		pPhysicalEntity->Action(&impulse);
+	}
+	return true;
 }

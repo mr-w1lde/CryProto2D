@@ -3,13 +3,14 @@
 #include "GamePlugin.h"
 
 #include "Components/Player.h"
+#include "Components/SpawnPoint.h"
+#include <CryEntitySystem/IEntityClass.h>
+#include <IGameObjectSystem.h>
+#include <IGameObject.h>
 
 #include <CrySchematyc/Env/IEnvRegistry.h>
 #include <CrySchematyc/Env/EnvPackage.h>
 #include <CrySchematyc/Utils/SharedString.h>
-
-#include <IGameObjectSystem.h>
-#include <IGameObject.h>
 
 // Included only once per DLL module.
 #include <CryCore/Platform/platform_impl.inl>
@@ -113,7 +114,7 @@ bool CGamePlugin::OnClientConnectionReceived(int channelId, bool bIsReset)
 		pPlayerEntity->GetNetEntity()->SetChannelId(channelId);
 
 		// Create the player component instance
-		CPlayerComponent* pPlayer = pPlayerEntity->GetOrCreateComponentClass<CPlayerComponent>();
+		CPlayerComponent* pPlayer = pPlayerEntity->GetOrCreateComponent<CPlayerComponent>();
 
 		if (pPlayer != nullptr)
 		{

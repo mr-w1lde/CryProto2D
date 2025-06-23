@@ -18,7 +18,7 @@ class CGamePlugin
 {
 public:
 	CRYINTERFACE_SIMPLE(Cry::IEnginePlugin)
-	CRYGENERATE_SINGLETONCLASS_GUID(CGamePlugin, "ThirdPersonShooter", "{0900F201-49F3-4B3C-81D1-0C91CF3C8FDA}"_cry_guid)
+	CRYGENERATE_SINGLETONCLASS_GUID(CGamePlugin, "RollingBall", "{24FE22B8-4592-440B-8E9C-BA5E6F22F721}"_cry_guid)
 
 	virtual ~CGamePlugin();
 	

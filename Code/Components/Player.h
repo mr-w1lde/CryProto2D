@@ -1,8 +1,5 @@
-// Copyright 2016-2019 Crytek GmbH / Crytek Group. All rights reserved.
+// Copyright 2017-2019 Crytek GmbH / Crytek Group. All rights reserved.
 #pragma once
-
-#include <array>
-#include <numeric>
 
 #include <CryEntitySystem/IEntityComponent.h>
 #include <CryMath/Cry_Camera.h>
@@ -11,14 +8,9 @@
 #include <CrySchematyc/Utils/EnumFlags.h>
 
 #include <DefaultComponents/Cameras/CameraComponent.h>
-#include <DefaultComponents/Physics/CharacterControllerComponent.h>
-#include <DefaultComponents/Physics/CapsulePrimitiveComponent.h>
-#include <DefaultComponents/Physics/CharacterControllerComponent.h>
-#include <DefaultComponents/Geometry/AdvancedAnimationComponent.h>
-#include <DefaultComponents/Geometry/AnimatedMeshComponent.h>
-#include <DefaultComponents/Geometry/StaticMeshComponent.h>
 #include <DefaultComponents/Input/InputComponent.h>
 #include <DefaultComponents/Audio/ListenerComponent.h>
+#include <CrySchematyc/CoreAPI.h>
 
 ////////////////////////////////////////////////////////
 // Represents a player participating in gameplay
@@ -36,80 +28,30 @@ class CPlayerComponent final : public IEntityComponent
 		MoveLeft = 1 << 0,
 		MoveRight = 1 << 1,
 		MoveForward = 1 << 2,
-		MoveBack = 1 << 3
+		MoveBack = 1 << 3,
+		Jump = 1 << 4
 	};
-	
+
 	static constexpr EEntityAspects InputAspect = eEA_GameClientD;
-
-	template<typename T, size_t SAMPLES_COUNT>
-	class MovingAverage
-	{
-		static_assert(SAMPLES_COUNT > 0, "SAMPLES_COUNT shall be larger than zero!");
-
-	public:
-
-		MovingAverage()
-			: m_values()
-			, m_cursor(SAMPLES_COUNT)
-			, m_accumulator()
-		{
-		}
-
-		MovingAverage& Push(const T& value)
-		{
-			if (m_cursor == SAMPLES_COUNT)
-			{
-				m_values.fill(value);
-				m_cursor = 0;
-				m_accumulator = std::accumulate(m_values.begin(), m_values.end(), T(0));
-			}
-			else
-			{
-				m_accumulator -= m_values[m_cursor];
-				m_values[m_cursor] = value;
-				m_accumulator += m_values[m_cursor];
-				m_cursor = (m_cursor + 1) % SAMPLES_COUNT;
-			}
-
-			return *this;
-		}
-
-		T Get() const
-		{
-			return m_accumulator / T(SAMPLES_COUNT);
-		}
-
-		void Reset()
-		{
-			m_cursor = SAMPLES_COUNT;
-		}
-
-	private:
-
-		std::array<T, SAMPLES_COUNT> m_values;
-		size_t m_cursor;
-
-		T m_accumulator;
-	};
 
 public:
 	CPlayerComponent() = default;
-	virtual ~CPlayerComponent() {}
+	virtual ~CPlayerComponent() = default;
 
 	// IEntityComponent
 	virtual void Initialize() override;
 
 	virtual Cry::Entity::EventFlags GetEventMask() const override;
 	virtual void ProcessEvent(const SEntityEvent& event) override;
-	
+
 	virtual bool NetSerialize(TSerialize ser, EEntityAspects aspect, uint8 profile, int flags) override;
-	virtual NetworkAspectType GetNetSerializeAspectMask() const override { return InputAspect; }
+	virtual NetworkAspectType GetNetSerializeAspectMask() const override { return InputAspect | eEA_Physics; };
 	// ~IEntityComponent
 
 	// Reflect type to set a unique identifier for this component
 	static void ReflectType(Schematyc::CTypeDesc<CPlayerComponent>& desc)
 	{
-		desc.SetGUID("{63F4C0C6-32AF-4ACB-8FB0-57D45DD14725}"_cry_guid);
+		desc.SetGUID("{B08F2F41-F02E-48B5-921A-3FF857F19ED6}"_cry_guid);
 	}
 
 	void OnReadyForGameplayOnServer();
@@ -119,17 +61,13 @@ protected:
 	void Revive(const Matrix34& transform);
 	
 	void UpdateMovementRequest(float frameTime);
-	void UpdateLookDirectionRequest(float frameTime);
-	void UpdateAnimation(float frameTime);
 	void UpdateCamera(float frameTime);
-
-	void CreateWeapon(const char *name);
 
 	void HandleInputFlagChange(CEnumFlags<EInputFlag> flags, CEnumFlags<EActionActivationMode> activationMode, EInputFlagType type = EInputFlagType::Hold);
 
 	// Called when this entity becomes the local player, to create client specific setup such as the Camera
 	void InitializeLocalPlayer();
-	
+
 	// Start remote method declarations
 protected:
 	// Parameters to be passed to the RemoteReviveOnClient function
@@ -151,22 +89,24 @@ protected:
 	// Remote method intended to be called on all remote clients when a player spawns on the server
 	bool RemoteReviveOnClient(RemoteReviveParams&& params, INetChannel* pNetChannel);
 	
+	// Parameters to be passed to the RemoteRequestJumpOnServer function
+	struct RemoteRequestJumpParams
+	{
+		void SerializeWith(TSerialize ser)
+		{
+		}
+	};
+	bool RemoteRequestJumpOnServer(RemoteRequestJumpParams&& p, INetChannel *);
+	
 protected:
 	bool m_isAlive = false;
 
 	Cry::DefaultComponents::CCameraComponent* m_pCameraComponent = nullptr;
-	Cry::DefaultComponents::CCharacterControllerComponent* m_pCharacterController = nullptr;
-	Cry::DefaultComponents::CAnimatedMeshComponent* m_pAnimationComponent = nullptr;
 	Cry::DefaultComponents::CInputComponent* m_pInputComponent = nullptr;
 	Cry::Audio::DefaultComponents::CListenerComponent* m_pAudioListenerComponent = nullptr;
 
-	FragmentID m_idleFragmentId;
-	FragmentID m_walkFragmentId;
-	TagID m_rotateTagId;
-
 	CEnumFlags<EInputFlag> m_inputFlags;
-	Vec2 m_mouseDeltaRotation;
-	MovingAverage<Vec2, 10> m_mouseDeltaSmoothingFilter;
-
-	FragmentID m_activeFragmentId;
+	Vec2 m_mouseDeltaRotation = ZERO;
+	// Should translate to head orientation in the future
+	Quat m_lookOrientation = IDENTITY;
 };

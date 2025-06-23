@@ -5,7 +5,7 @@
 #include <CryEntitySystem/IEntitySystem.h>
 
 ////////////////////////////////////////////////////////
-// Spawn point
+// Spawn point to spawn the player
 ////////////////////////////////////////////////////////
 class CSpawnPointComponent final : public IEntityComponent
 {
