@@ -2,7 +2,7 @@
 #pragma once
 
 #include <CryEntitySystem/IEntityComponent.h>
-#include <CryMath/Cry_Camera.h>
+#include <DefaultComponents/Physics/CharacterControllerComponent.h>
 
 #include <ICryMannequin.h>
 #include <CrySchematyc/Utils/EnumFlags.h>
@@ -11,6 +11,9 @@
 #include <DefaultComponents/Input/InputComponent.h>
 #include <DefaultComponents/Audio/ListenerComponent.h>
 #include <CrySchematyc/CoreAPI.h>
+
+#include "Schematyc/FFlipbookAnim.h"
+#include "Schematyc/SpriteFlipbookComponent.h"
 
 ////////////////////////////////////////////////////////
 // Represents a player participating in gameplay
@@ -32,10 +35,17 @@ class CPlayerComponent final : public IEntityComponent
 		Jump = 1 << 4
 	};
 
-	static constexpr EEntityAspects InputAspect = eEA_GameClientD;
+	enum class EPlayerState
+	{
+		Idle,
+		Moving,
+		Jumping,
+		Falling,
+		Attacking
+	};
 
 public:
-	CPlayerComponent() = default;
+	CPlayerComponent();
 	virtual ~CPlayerComponent() = default;
 
 	// IEntityComponent
@@ -43,70 +53,56 @@ public:
 
 	virtual Cry::Entity::EventFlags GetEventMask() const override;
 	virtual void ProcessEvent(const SEntityEvent& event) override;
-
-	virtual bool NetSerialize(TSerialize ser, EEntityAspects aspect, uint8 profile, int flags) override;
-	virtual NetworkAspectType GetNetSerializeAspectMask() const override { return InputAspect | eEA_Physics; };
-	// ~IEntityComponent
-
+	
 	// Reflect type to set a unique identifier for this component
 	static void ReflectType(Schematyc::CTypeDesc<CPlayerComponent>& desc)
 	{
 		desc.SetGUID("{B08F2F41-F02E-48B5-921A-3FF857F19ED6}"_cry_guid);
+		desc.SetLabel("Player");
 	}
-
-	void OnReadyForGameplayOnServer();
-	bool IsLocalClient() const { return (m_pEntity->GetFlags() & ENTITY_FLAG_LOCAL_PLAYER) != 0; }
 	
 protected:
-	void Revive(const Matrix34& transform);
 	
 	void UpdateMovementRequest(float frameTime);
+	void UpdatePlayerState(float frameTime);
 	void UpdateCamera(float frameTime);
 
 	void HandleInputFlagChange(CEnumFlags<EInputFlag> flags, CEnumFlags<EActionActivationMode> activationMode, EInputFlagType type = EInputFlagType::Hold);
 
 	// Called when this entity becomes the local player, to create client specific setup such as the Camera
 	void InitializeLocalPlayer();
-
-	// Start remote method declarations
-protected:
-	// Parameters to be passed to the RemoteReviveOnClient function
-	struct RemoteReviveParams
-	{
-		// Called once on the server to serialize data to the other clients
-		// Then called once on the other side to deserialize
-		void SerializeWith(TSerialize ser)
-		{
-			// Serialize the position with the 'wrld' compression policy
-			ser.Value("pos", position, 'wrld');
-			// Serialize the rotation with the 'ori0' compression policy
-			ser.Value("rot", rotation, 'ori0');
-		}
-		
-		Vec3 position;
-		Quat rotation;
-	};
-	// Remote method intended to be called on all remote clients when a player spawns on the server
-	bool RemoteReviveOnClient(RemoteReviveParams&& params, INetChannel* pNetChannel);
 	
-	// Parameters to be passed to the RemoteRequestJumpOnServer function
-	struct RemoteRequestJumpParams
+	void EnterState(EPlayerState newState);
+
+	const char* GetPlayerStateName() const
 	{
-		void SerializeWith(TSerialize ser)
-		{
+		switch (m_state) {
+		case EPlayerState::Idle: return "Idle";
+		case EPlayerState::Moving: return "Moving";
+		case EPlayerState::Jumping: return "Jumping";
+		case EPlayerState::Falling: return "Falling";
+		case EPlayerState::Attacking: return "Attacking";
+		default: return "Unknown";
 		}
-	};
-	bool RemoteRequestJumpOnServer(RemoteRequestJumpParams&& p, INetChannel *);
+	}
 	
 protected:
 	bool m_isAlive = false;
 
 	Cry::DefaultComponents::CCameraComponent* m_pCameraComponent = nullptr;
+	Cry::DefaultComponents::CCharacterControllerComponent* m_pCharacterController = nullptr;
 	Cry::DefaultComponents::CInputComponent* m_pInputComponent = nullptr;
 	Cry::Audio::DefaultComponents::CListenerComponent* m_pAudioListenerComponent = nullptr;
+	CSpriteFlipbookComponent* m_pSpriteFlipbookComponent = nullptr;
+	
 
 	CEnumFlags<EInputFlag> m_inputFlags;
 	Vec2 m_mouseDeltaRotation = ZERO;
 	// Should translate to head orientation in the future
 	Quat m_lookOrientation = IDENTITY;
+
+	std::unordered_map<int, FFlipbookAnim> m_animations;
+
+	EPlayerState m_state = EPlayerState::Idle;
+	float m_stateTime = 0.f;
 };
